@@ -18,6 +18,19 @@ Authored here, copied into `linko-apple` and `linko-server` by `sync-shared.sh`.
 
 Tests for the GitHub tooling: `python3 -I -B -m unittest discover -s tooling/github`.
 
+## Secret guards — verified
+
+Checked on 2026-10-25 with a fake AWS-style key (`AKIA` + 16 letters) in `leak.txt`:
+
+| Layer | Result |
+| --- | --- |
+| Claude Code guard hook | reading `leak.pem` blocked: `Blocked by linko guard: access to secret file …`, exit 2 |
+| pre-commit gitleaks | commit aborted: `Detect hardcoded secrets … Failed`, rule `aws-access-token` |
+| commit-msg (Conventional Commits) | `wip stuff` rejected |
+| CI gitleaks (hooks bypassed, pushed, PR opened) | `gitleaks` check failed with `aws-access-token`; PR closed, branch deleted |
+
+Not available: GitHub secret scanning and push protection, and server-side branch protection (rulesets and classic protection both answer HTTP 403 "Upgrade to GitHub Pro or make this repository public"). Branch rules are therefore enforced by the guard hook and by merging only with `gh pr merge` after green checks. A fake secret pushed to a pull request stays reachable through the pull request's refs on GitHub; only fake keys are used for such tests.
+
 ## Usage
 
 ```sh
