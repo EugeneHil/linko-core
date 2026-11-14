@@ -1,0 +1,3 @@
+# linko-core C++ formatting: LLVM style with 4-space indentation.
+BasedOnStyle: LLVM
+IndentWidth: 4
