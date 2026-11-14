@@ -183,12 +183,18 @@ auto parseEnvelope(std::string_view json) -> ParseResult {
         result.errors.push_back({"id", "empty"});
     }
 
-    // Timestamp.
+    // Timestamp. Unsigned values above INT64_MAX are rejected instead of
+    // silently wrapping in get<int64_t>.
     const auto tsField = root.find("ts");
     if (tsField == root.end()) {
         result.errors.push_back({"ts", "missing"});
     } else if (!tsField->is_number_integer()) {
         result.errors.push_back({"ts", "must be an integer"});
+    } else if (tsField->is_number_unsigned() &&
+               tsField->get<std::uint64_t>() >
+                   static_cast<std::uint64_t>(
+                       std::numeric_limits<std::int64_t>::max())) {
+        result.errors.push_back({"ts", "out of range"});
     }
 
     // Body.

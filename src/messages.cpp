@@ -4,6 +4,7 @@
 #include "linko/messages.hpp"
 
 #include <initializer_list>
+#include <limits>
 #include <utility>
 
 namespace linko {
@@ -43,6 +44,21 @@ auto requireString(const nlohmann::json &object, const char *key,
     return field->get<std::string>();
 }
 
+// Required identifier string (callId, fileId, conversation, message id):
+// like requireString, but an empty value is rejected too - an empty
+// identifier is hostile input, not an identifier.
+auto requireNonEmptyString(const nlohmann::json &object, const char *key,
+                           const std::string &path,
+                           std::vector<ValidationError> &errors)
+    -> std::optional<std::string> {
+    auto value = requireString(object, key, path, errors);
+    if (value.has_value() && value->empty()) {
+        errors.push_back({fieldPath(path, key), "must not be empty"});
+        return std::nullopt;
+    }
+    return value;
+}
+
 // Required string field whose value must be one of `allowed`; a present but
 // unknown value is reported as "invalid".
 auto requireStringIn(const nlohmann::json &object, const char *key,
@@ -63,7 +79,8 @@ auto requireStringIn(const nlohmann::json &object, const char *key,
     return std::nullopt;
 }
 
-// Required integer field.
+// Required integer field. Unsigned JSON numbers above INT64_MAX are
+// rejected: nlohmann's get<int64_t> would silently wrap them.
 auto requireInt64(const nlohmann::json &object, const char *key,
                   const std::string &path, std::vector<ValidationError> &errors)
     -> std::optional<std::int64_t> {
@@ -74,6 +91,13 @@ auto requireInt64(const nlohmann::json &object, const char *key,
     }
     if (!field->is_number_integer()) {
         errors.push_back({fieldPath(path, key), "must be an integer"});
+        return std::nullopt;
+    }
+    if (field->is_number_unsigned() &&
+        field->get<std::uint64_t>() >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+        errors.push_back({fieldPath(path, key), "out of range"});
         return std::nullopt;
     }
     return field->get<std::int64_t>();
@@ -125,7 +149,7 @@ auto fileMetaFromJson(const nlohmann::json &object, const std::string &path,
     const auto sha256 = requireString(object, "sha256", path, errors);
     const auto transport =
         requireStringIn(object, "transport", path, {"p2p", "server"}, errors);
-    const auto fileId = requireString(object, "fileId", path, errors);
+    const auto fileId = requireNonEmptyString(object, "fileId", path, errors);
     if (!name.has_value() || !size.has_value() || !sha256.has_value() ||
         !transport.has_value() || !fileId.has_value()) {
         return std::nullopt;
@@ -160,7 +184,7 @@ auto messageRecordFromJson(const nlohmann::json &object,
     if (!requireObject(object, path, errors)) {
         return std::nullopt;
     }
-    const auto recordId = requireString(object, "id", path, errors);
+    const auto recordId = requireNonEmptyString(object, "id", path, errors);
     const auto from = requireString(object, "from", path, errors);
     const auto toUser = requireString(object, "to", path, errors);
     const auto text = requireString(object, "text", path, errors);
@@ -263,7 +287,7 @@ auto CallInvite::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
     const auto toUser = requireString(body, "to", "body", errors);
     const auto media =
         requireStringIn(body, "media", "body", {"audio", "video"}, errors);
@@ -285,7 +309,7 @@ auto CallRef::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
     if (!callId.has_value()) {
         return std::nullopt;
     }
@@ -305,7 +329,7 @@ auto CallSdp::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
     auto sdp = requireString(body, "sdp", "body", errors);
     if (sdp.has_value() && sdp->size() > kMaxSdpBytes) {
         errors.push_back({"body.sdp", "too large"});
@@ -332,11 +356,16 @@ auto CallIce::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
     const auto candidate = requireString(body, "candidate", "body", errors);
     const auto sdpMid = requireString(body, "sdpMid", "body", errors);
-    const auto sdpMLineIndex =
-        requireInt64(body, "sdpMLineIndex", "body", errors);
+    auto sdpMLineIndex = requireInt64(body, "sdpMLineIndex", "body", errors);
+    if (sdpMLineIndex.has_value() &&
+        (*sdpMLineIndex < 0 ||
+         *sdpMLineIndex > std::numeric_limits<int>::max())) {
+        errors.push_back({"body.sdpMLineIndex", "out of range"});
+        sdpMLineIndex.reset();
+    }
     if (!callId.has_value() || !candidate.has_value() || !sdpMid.has_value() ||
         !sdpMLineIndex.has_value()) {
         return std::nullopt;
@@ -365,7 +394,7 @@ auto CallEnd::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
     const auto reason = optionalString(body, "reason", "body", errors);
     if (!callId.has_value() || !reason.has_value()) {
         return std::nullopt;
@@ -426,7 +455,7 @@ auto MsgSend::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto msgId = requireString(body, "id", "body", errors);
+    const auto msgId = requireNonEmptyString(body, "id", "body", errors);
     const auto toUser = requireString(body, "to", "body", errors);
     const auto text = requireString(body, "text", "body", errors);
     std::optional<FileMeta> file;
@@ -452,7 +481,7 @@ auto MsgStored::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto msgId = requireString(body, "id", "body", errors);
+    const auto msgId = requireNonEmptyString(body, "id", "body", errors);
     const auto seq = requireInt64(body, "seq", "body", errors);
     const auto timestamp = requireInt64(body, "ts", "body", errors);
     if (!msgId.has_value() || !seq.has_value() || !timestamp.has_value()) {
@@ -500,7 +529,7 @@ auto MsgAck::fromBody(const nlohmann::json &body,
         return std::nullopt;
     }
     const auto conversation =
-        requireString(body, "conversation", "body", errors);
+        requireNonEmptyString(body, "conversation", "body", errors);
     const auto uptoSeq = requireInt64(body, "uptoSeq", "body", errors);
     if (!conversation.has_value() || !uptoSeq.has_value()) {
         return std::nullopt;
@@ -522,7 +551,7 @@ auto MsgSync::fromBody(const nlohmann::json &body,
         return std::nullopt;
     }
     const auto conversation =
-        requireString(body, "conversation", "body", errors);
+        requireNonEmptyString(body, "conversation", "body", errors);
     const auto afterSeq = requireInt64(body, "afterSeq", "body", errors);
     if (!conversation.has_value() || !afterSeq.has_value()) {
         return std::nullopt;
@@ -550,8 +579,8 @@ auto FileOffer::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
-    const auto fileId = requireString(body, "fileId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
+    const auto fileId = requireNonEmptyString(body, "fileId", "body", errors);
     const auto name = requireString(body, "name", "body", errors);
     const auto size = requireInt64(body, "size", "body", errors);
     const auto sha256 = requireString(body, "sha256", "body", errors);
@@ -560,6 +589,26 @@ auto FileOffer::fromBody(const nlohmann::json &body,
     if (!callId.has_value() || !fileId.has_value() || !name.has_value() ||
         !size.has_value() || !sha256.has_value() || !chunkSize.has_value() ||
         !chunkCount.has_value()) {
+        return std::nullopt;
+    }
+    // A manifest that cannot describe real chunks would hang a transfer
+    // instead of failing fast: reject negatives, non-positive or oversized
+    // chunk sizes, and a chunkCount that disagrees with ceil(size/chunkSize)
+    // (same overflow-free arithmetic as makeManifest).
+    if (*size < 0) {
+        errors.push_back({"body.size", "must not be negative"});
+        return std::nullopt;
+    }
+    if (*chunkSize <= 0 ||
+        *chunkSize > std::numeric_limits<std::uint32_t>::max()) {
+        errors.push_back({"body.chunkSize", "out of range"});
+        return std::nullopt;
+    }
+    const std::int64_t expectedChunks =
+        *size == 0 ? 0 : ((*size - 1) / *chunkSize) + 1;
+    if (*chunkCount != expectedChunks) {
+        errors.push_back(
+            {"body.chunkCount", "inconsistent with size and chunkSize"});
         return std::nullopt;
     }
     return FileOffer{
@@ -588,8 +637,8 @@ auto FileAccept::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
-    const auto fileId = requireString(body, "fileId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
+    const auto fileId = requireNonEmptyString(body, "fileId", "body", errors);
     if (!callId.has_value() || !fileId.has_value()) {
         return std::nullopt;
     }
@@ -610,8 +659,8 @@ auto FileCancel::fromBody(const nlohmann::json &body,
     if (!requireObject(body, "body", errors)) {
         return std::nullopt;
     }
-    const auto callId = requireString(body, "callId", "body", errors);
-    const auto fileId = requireString(body, "fileId", "body", errors);
+    const auto callId = requireNonEmptyString(body, "callId", "body", errors);
+    const auto fileId = requireNonEmptyString(body, "fileId", "body", errors);
     const auto reason = requireString(body, "reason", "body", errors);
     if (!callId.has_value() || !fileId.has_value() || !reason.has_value()) {
         return std::nullopt;

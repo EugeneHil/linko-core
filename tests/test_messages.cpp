@@ -2,6 +2,8 @@
 // The test names are the contract from the task brief; keep them verbatim.
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -19,6 +21,13 @@ constexpr std::int64_t kSampleTs = 1792877416123;
 constexpr std::int64_t kSampleSeq = 7;
 constexpr std::uint64_t kSampleFileSize = 4096;
 constexpr std::uint32_t kSampleChunkSize = 16384;
+constexpr std::int64_t kAckUptoSeq = 41;
+constexpr std::int64_t kSyncAfterSeq = 40;
+constexpr std::int64_t kInt32MaxPlus1 = 2147483648LL;
+constexpr std::uint64_t kUint64Max = 18446744073709551615ULL;
+constexpr std::int64_t kNegativeFileSize = -5;
+constexpr std::int64_t kWrongChunkCount = 5;
+constexpr std::uint32_t kSmallChunkSize = 16;
 
 // All errors of a parse formatted as "path: message" for failure messages.
 auto joinedErrors(const std::vector<linko::ValidationError> &errors)
@@ -436,6 +445,142 @@ TEST(Messages, test_missing_required_fields_rejected) {
         "missing");
 }
 
+// Identifier fields (callId, fileId, conversation, message id) must carry at
+// least one character: an empty one is hostile input, not an identifier. A
+// hostile peer sending call.hangup with callId "" must die at the parser,
+// before any state machine can mistake it for "the current call".
+TEST(Messages, test_empty_required_ids_rejected) {
+    expectSingleError<linko::CallInvite>(
+        withField(linko::CallInvite{"c7a2", "anna", "audio"}.toBody(), "callId",
+                  ""),
+        "body.callId", "must not be empty");
+    expectSingleError<linko::CallRef>(
+        withField(linko::CallRef{"c7a2"}.toBody(), "callId", ""), "body.callId",
+        "must not be empty");
+    expectSingleError<linko::CallSdp>(
+        withField(linko::CallSdp{"c7a2", "v=0"}.toBody(), "callId", ""),
+        "body.callId", "must not be empty");
+    expectSingleError<linko::CallIce>(
+        withField(linko::CallIce{"c7a2", "candidate:1 1 UDP", "0", 0}.toBody(),
+                  "callId", ""),
+        "body.callId", "must not be empty");
+    expectSingleError<linko::CallEnd>(
+        withField(linko::CallEnd{"c7a2", std::nullopt}.toBody(), "callId", ""),
+        "body.callId", "must not be empty");
+    expectSingleError<linko::MsgSend>(
+        withField(linko::MsgSend{"m-1", "anna", "hello", std::nullopt}.toBody(),
+                  "id", ""),
+        "body.id", "must not be empty");
+    expectSingleError<linko::MsgStored>(
+        withField(linko::MsgStored{"m-1", kSampleSeq, kSampleTs}.toBody(), "id",
+                  ""),
+        "body.id", "must not be empty");
+    expectSingleError<linko::MsgAck>(
+        withField(linko::MsgAck{"conv-1", kAckUptoSeq}.toBody(), "conversation",
+                  ""),
+        "body.conversation", "must not be empty");
+    expectSingleError<linko::MsgSync>(
+        withField(linko::MsgSync{"conv-1", kSyncAfterSeq}.toBody(),
+                  "conversation", ""),
+        "body.conversation", "must not be empty");
+    expectSingleError<linko::FileOffer>(withField(
+                                            linko::FileOffer{
+                                                "c7a2",
+                                                "file-7",
+                                                linko::FileManifest{
+                                                    "report.pdf",
+                                                    kSampleFileSize,
+                                                    "9f2c8ab34e5d",
+                                                    kSampleChunkSize,
+                                                    1,
+                                                },
+                                            }
+                                                .toBody(),
+                                            "callId", ""),
+                                        "body.callId", "must not be empty");
+    expectSingleError<linko::FileOffer>(withField(
+                                            linko::FileOffer{
+                                                "c7a2",
+                                                "file-7",
+                                                linko::FileManifest{
+                                                    "report.pdf",
+                                                    kSampleFileSize,
+                                                    "9f2c8ab34e5d",
+                                                    kSampleChunkSize,
+                                                    1,
+                                                },
+                                            }
+                                                .toBody(),
+                                            "fileId", ""),
+                                        "body.fileId", "must not be empty");
+    expectSingleError<linko::FileAccept>(
+        withField(linko::FileAccept{"c7a2", "file-7"}.toBody(), "callId", ""),
+        "body.callId", "must not be empty");
+    expectSingleError<linko::FileAccept>(
+        withField(linko::FileAccept{"c7a2", "file-7"}.toBody(), "fileId", ""),
+        "body.fileId", "must not be empty");
+    expectSingleError<linko::FileCancel>(
+        withField(
+            linko::FileCancel{"c7a2", "file-7", "user cancelled"}.toBody(),
+            "callId", ""),
+        "body.callId", "must not be empty");
+    expectSingleError<linko::FileCancel>(
+        withField(
+            linko::FileCancel{"c7a2", "file-7", "user cancelled"}.toBody(),
+            "fileId", ""),
+        "body.fileId", "must not be empty");
+
+    // The nested FileMeta fileId and MessageRecord id are held to the same
+    // rule, with their nested paths.
+    expectSingleError<linko::FileMeta>(withField(
+                                           linko::FileMeta{
+                                               "report.pdf",
+                                               kSampleFileSize,
+                                               "9f2c8ab34e5d",
+                                               "p2p",
+                                               "file-7",
+                                           }
+                                               .toBody(),
+                                           "fileId", ""),
+                                       "body.fileId", "must not be empty");
+    auto record =
+        linko::MessageRecord{
+            "m-1", "anna", "bob", "hello", std::nullopt, kSampleSeq, kSampleTs,
+        }
+            .toBody();
+    record["id"] = "";
+    expectSingleError<linko::MsgDeliver>(nlohmann::json{{"message", record}},
+                                         "body.message.id",
+                                         "must not be empty");
+}
+
+// Only identifiers must be non-empty: free-text and optional fields stay
+// legal at zero length (an absent reason and an empty reason are both fine).
+TEST(Messages, test_free_text_fields_may_be_empty) {
+    std::vector<linko::ValidationError> errors;
+    const auto ended = linko::CallEnd::fromBody(
+        nlohmann::json{{"callId", "c7a2"}, {"reason", ""}}, errors);
+    EXPECT_TRUE(errors.empty());
+    ASSERT_TRUE(ended.has_value());
+    // The accesses below are guarded by the ASSERT above; tidy cannot see
+    // through the gtest macro.
+    // NOLINTBEGIN(bugprone-unchecked-optional-access)
+    ASSERT_TRUE(ended->reason.has_value());
+    EXPECT_TRUE(ended->reason->empty());
+    // NOLINTEND(bugprone-unchecked-optional-access)
+
+    std::vector<linko::ValidationError> cancelErrors;
+    const auto cancelled = linko::FileCancel::fromBody(
+        nlohmann::json{
+            {"callId", "c7a2"},
+            {"fileId", "file-7"},
+            {"reason", ""},
+        },
+        cancelErrors);
+    EXPECT_TRUE(cancelErrors.empty());
+    ASSERT_TRUE(cancelled.has_value());
+}
+
 TEST(Messages, test_nested_file_and_message_errors) {
     // A file field that is present but not an object.
     expectSingleError<linko::MsgSend>(
@@ -477,4 +622,93 @@ TEST(Messages, test_nested_file_and_message_errors) {
     record.erase("seq");
     expectSingleError<linko::MsgDeliver>(nlohmann::json{{"message", record}},
                                          "body.message.seq", "missing");
+}
+
+// Numeric fields are range-checked: int-truncating casts and silent
+// unsigned wraparounds must never turn hostile input into plausible values.
+TEST(Messages, test_numeric_fields_range_checked) {
+    // sdpMLineIndex below 0 or above INT32_MAX would truncate in the int cast.
+    expectSingleError<linko::CallIce>(
+        withField(linko::CallIce{"c7a2", "candidate:1 1 UDP", "0", 0}.toBody(),
+                  "sdpMLineIndex", -1),
+        "body.sdpMLineIndex", "out of range");
+    expectSingleError<linko::CallIce>(
+        withField(linko::CallIce{"c7a2", "candidate:1 1 UDP", "0", 0}.toBody(),
+                  "sdpMLineIndex", kInt32MaxPlus1),
+        "body.sdpMLineIndex", "out of range");
+    // Unsigned numbers above INT64_MAX must be rejected, not wrapped.
+    expectSingleError<linko::MsgStored>(
+        withField(linko::MsgStored{"m-1", kSampleSeq, kSampleTs}.toBody(),
+                  "seq", kUint64Max),
+        "body.seq", "out of range");
+}
+
+// A file offer whose manifest cannot describe real chunks is rejected at the
+// parser instead of hanging the transfer later.
+TEST(Messages, test_file_offer_manifest_consistency) {
+    // size=100, chunkSize=16 -> ceil(100/16) = 7.
+    const linko::FileManifest consistent{
+        "report.pdf", 100, "9f2c8ab34e5d", kSmallChunkSize, 7,
+    };
+    EXPECT_TRUE(roundTrips(linko::FileOffer{"c7a2", "file-7", consistent}));
+
+    expectSingleError<linko::FileOffer>(
+        withField(linko::FileOffer{"c7a2", "file-7", consistent}.toBody(),
+                  "size", kNegativeFileSize),
+        "body.size", "must not be negative");
+    expectSingleError<linko::FileOffer>(
+        withField(linko::FileOffer{"c7a2", "file-7", consistent}.toBody(),
+                  "chunkSize", 0),
+        "body.chunkSize", "out of range");
+    expectSingleError<linko::FileOffer>(
+        withField(linko::FileOffer{"c7a2", "file-7", consistent}.toBody(),
+                  "chunkCount", kWrongChunkCount),
+        "body.chunkCount", "inconsistent with size and chunkSize");
+    // An empty file is zero chunks; claiming one is inconsistent.
+    expectSingleError<linko::FileOffer>(withField(
+                                            linko::FileOffer{
+                                                "c7a2",
+                                                "file-7",
+                                                linko::FileManifest{
+                                                    "empty.txt",
+                                                    0,
+                                                    "e3b0c442",
+                                                    kSmallChunkSize,
+                                                    0,
+                                                },
+                                            }
+                                                .toBody(),
+                                            "chunkCount", 1),
+                                        "body.chunkCount",
+                                        "inconsistent with size and chunkSize");
+}
+
+// kKnownTypes is hand-maintained: every kType* constant must appear in it and
+// no entry may be empty — a forgotten constant would silently bless an
+// unknown type.
+TEST(Messages, test_known_types_cover_every_constant) {
+    const std::array<std::string_view, 25> all{
+        linko::kTypeSessionHello,    linko::kTypeSessionPing,
+        linko::kTypeSessionPong,     linko::kTypeSessionError,
+        linko::kTypePresenceChanged, linko::kTypeCallInvite,
+        linko::kTypeCallRinging,     linko::kTypeCallAccept,
+        linko::kTypeCallReject,      linko::kTypeCallBusy,
+        linko::kTypeCallCancel,      linko::kTypeCallOffer,
+        linko::kTypeCallAnswer,      linko::kTypeCallIce,
+        linko::kTypeCallIceRestart,  linko::kTypeCallHangup,
+        linko::kTypeMsgSend,         linko::kTypeMsgStored,
+        linko::kTypeMsgDeliver,      linko::kTypeMsgAckDelivered,
+        linko::kTypeMsgAckRead,      linko::kTypeMsgSync,
+        linko::kTypeFileOffer,       linko::kTypeFileAccept,
+        linko::kTypeFileCancel,
+    };
+    for (const auto type : all) {
+        EXPECT_NE(std::find(linko::kKnownTypes.begin(),
+                            linko::kKnownTypes.end(), type),
+                  linko::kKnownTypes.end())
+            << type;
+    }
+    for (const auto type : linko::kKnownTypes) {
+        EXPECT_FALSE(type.empty());
+    }
 }

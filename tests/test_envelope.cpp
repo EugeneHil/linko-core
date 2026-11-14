@@ -256,3 +256,13 @@ TEST(Envelope, test_missing_body_rejected) {
     EXPECT_FALSE(result.envelope.has_value());
     EXPECT_TRUE(hasError(result, "body: missing"));
 }
+
+TEST(Envelope, test_rejects_out_of_range_ts) {
+    // 2^64-1 parses as unsigned; it must be rejected, not wrapped by
+    // get<int64_t>.
+    const auto result = linko::parseEnvelope(
+        R"({"v":1,"type":"session.ping","id":"6f1c","ts":18446744073709551615,"body":{}})");
+    EXPECT_FALSE(result.envelope.has_value());
+    EXPECT_TRUE(hasError(result, "ts: out of range"));
+    EXPECT_FALSE(result.unsupportedVersion);
+}
