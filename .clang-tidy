@@ -1,0 +1,3 @@
+# linko-core clang-tidy checks; findings are errors in scripts/ci-local.sh.
+Checks: 'bugprone-*,modernize-*,readability-*,performance-*'
+WarningsAsErrors: '*'
