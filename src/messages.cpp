@@ -536,11 +536,11 @@ auto FileOffer::toBody() const -> nlohmann::json {
     return nlohmann::json{
         {"callId", callId},
         {"fileId", fileId},
-        {"name", name},
-        {"size", size},
-        {"sha256", sha256},
-        {"chunkSize", chunkSize},
-        {"chunkCount", chunkCount},
+        {"name", manifest.name},
+        {"size", manifest.size},
+        {"sha256", manifest.sha256Hex},
+        {"chunkSize", manifest.chunkSize},
+        {"chunkCount", manifest.chunkCount},
     };
 }
 
@@ -563,7 +563,15 @@ auto FileOffer::fromBody(const nlohmann::json &body,
         return std::nullopt;
     }
     return FileOffer{
-        *callId, *fileId, *name, *size, *sha256, *chunkSize, *chunkCount,
+        *callId,
+        *fileId,
+        FileManifest{
+            *name,
+            static_cast<std::uint64_t>(*size),
+            *sha256,
+            static_cast<std::uint32_t>(*chunkSize),
+            static_cast<std::uint32_t>(*chunkCount),
+        },
     };
 }
 

@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 
 #include "linko/envelope.hpp"
+#include "linko/file_transfer.hpp"
 
 namespace linko {
 
@@ -312,26 +313,23 @@ struct MsgSync {
 // --- file family (in-call transfers; metadata only, bytes go over the data
 // channel) ---
 
-// Body of file.offer. The manifest fields ride inline until Task 5 swaps in a
-// FileManifest struct; the JSON shape stays the same.
+// Body of file.offer: the call and file ids plus the transfer manifest
+// (FileManifest from file_transfer.hpp). The manifest fields ride at the top
+// level of the body - "name", "size", "sha256", "chunkSize", "chunkCount" -
+// which is the same JSON shape file.offer has always had; only the C++
+// layout changed when the inline fields became a FileManifest.
 struct FileOffer {
     std::string callId;
     std::string fileId;
-    std::string name;
-    std::int64_t size = 0;
-    std::string sha256;
-    std::int64_t chunkSize = 0;
-    std::int64_t chunkCount = 0;
+    FileManifest manifest;
 
     [[nodiscard]] auto toBody() const -> nlohmann::json;
     static auto fromBody(const nlohmann::json &body,
                          std::vector<ValidationError> &errors)
         -> std::optional<FileOffer>;
     auto operator==(const FileOffer &other) const -> bool {
-        return std::tie(callId, fileId, name, size, sha256, chunkSize,
-                        chunkCount) ==
-               std::tie(other.callId, other.fileId, other.name, other.size,
-                        other.sha256, other.chunkSize, other.chunkCount);
+        return std::tie(callId, fileId, manifest) ==
+               std::tie(other.callId, other.fileId, other.manifest);
     }
 };
 
