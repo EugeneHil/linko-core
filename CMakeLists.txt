@@ -24,7 +24,8 @@ endif()
 # The core library: pure value types and pure functions only (design spec 4.2).
 # src/linko.cpp anchors the static library; real units land in src/ with their
 # public headers in include/linko/.
-add_library(linko_core STATIC src/linko.cpp src/envelope.cpp src/messages.cpp)
+add_library(linko_core STATIC src/linko.cpp src/envelope.cpp src/messages.cpp
+                           src/call_state_machine.cpp)
 target_include_directories(linko_core
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 # Envelope headers expose nlohmann/json, so propagate it to every consumer.
