@@ -4,9 +4,11 @@
 // runs exactly these scenarios.
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "linko/call_state_machine.hpp"
@@ -267,7 +269,10 @@ TEST(call_state, test_cancel_while_ringing) {
         linko::applyEvent(at(CallStateKind::OutgoingRinging, "c1"),
                           on(CallEvent::LocalCancel, "c1"));
     expectState(transition, endedState("c1", EndReason::Cancelled));
-    expectEffects(transition, {send(linko::kTypeCallCancel)});
+    expectEffects(transition, {
+                                  cancelTimer(linko::kRingTimeoutMs),
+                                  send(linko::kTypeCallCancel),
+                              });
 }
 
 TEST(call_state, test_ring_timeout_missed) {
@@ -423,6 +428,31 @@ TEST(call_state, test_idle_stays_idle_on_stray_events) {
          }) {
         const Transition transition = linko::applyEvent(idle, *event);
         expectState(transition, idle);
+        expectEffects(transition, {});
+    }
+}
+
+// An event whose callId is EMPTY is foreign to every call: it never
+// addresses the current call (and never triggers glare), so it is ignored
+// in every non-idle state. The typed bodies already reject empty callIds;
+// this rule guards hosts that translate wire messages into events by hand.
+// A hostile call.hangup with callId "" must not kill the current call.
+TEST(call_state, test_ignores_empty_call_id_events) {
+    const std::vector<std::pair<CallState, CallEvent::Kind>> cases{
+        {at(CallStateKind::OutgoingRinging, "c1"), CallEvent::RemoteReject},
+        {at(CallStateKind::OutgoingRinging, "c1"), CallEvent::RemoteBusy},
+        {at(CallStateKind::OutgoingRinging, "c1"), CallEvent::LocalCancel},
+        {at(CallStateKind::OutgoingRinging, "c1"), CallEvent::RemoteInvite},
+        {at(CallStateKind::IncomingRinging, "c2"), CallEvent::RemoteCancel},
+        {at(CallStateKind::IncomingRinging, "c2"), CallEvent::LocalReject},
+        {at(CallStateKind::Connecting, "c1"), CallEvent::RemoteHangup},
+        {at(CallStateKind::Active, "c1"), CallEvent::RemoteHangup},
+        {at(CallStateKind::Reconnecting, "c1"), CallEvent::RemoteHangup},
+        {endedState("c1", EndReason::Normal), CallEvent::RemoteHangup},
+    };
+    for (const auto &[state, kind] : cases) {
+        const Transition transition = linko::applyEvent(state, on(kind, ""));
+        expectState(transition, state);
         expectEffects(transition, {});
     }
 }
