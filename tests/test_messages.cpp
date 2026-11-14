@@ -216,6 +216,34 @@ TEST(Messages, test_unknown_type_now_rejected) {
     EXPECT_EQ(rejected.errors[0].message, "unknown 'chat.say'");
 }
 
+TEST(Messages, test_file_offer_body_shape) {
+    // The manifest fields ride at the top level of the file.offer body; the
+    // JSON shape is pinned here independently of the C++ FileManifest layout.
+    const linko::FileOffer offer{
+        "c7a2",
+        "file-7",
+        linko::FileManifest{"report.pdf", 4096, "9f2c8ab34e5d", 16384, 1},
+    };
+    const auto body = offer.toBody();
+    EXPECT_EQ(body["callId"], "c7a2");
+    EXPECT_EQ(body["fileId"], "file-7");
+    EXPECT_EQ(body["name"], "report.pdf");
+    EXPECT_EQ(body["size"], 4096);
+    EXPECT_EQ(body["sha256"], "9f2c8ab34e5d");
+    EXPECT_EQ(body["chunkSize"], 16384);
+    EXPECT_EQ(body["chunkCount"], 1);
+
+    std::vector<linko::ValidationError> errors;
+    const auto parsed = linko::FileOffer::fromBody(body, errors);
+    EXPECT_TRUE(errors.empty());
+    ASSERT_TRUE(parsed.has_value());
+    // The access below is guarded by the ASSERT above; tidy cannot see
+    // through the gtest macro.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    EXPECT_EQ(parsed->manifest, offer.manifest);
+    EXPECT_TRUE(*parsed == offer); // NOLINT(bugprone-unchecked-optional-access)
+}
+
 TEST(Messages, test_all_bodies_roundtrip) {
     const linko::FileMeta meta{
         "report.pdf", 4096, "9f2c8ab34e5d", "p2p", "file-7",
@@ -258,11 +286,7 @@ TEST(Messages, test_all_bodies_roundtrip) {
     EXPECT_TRUE(roundTrips(linko::FileOffer{
         "c7a2",
         "file-7",
-        "report.pdf",
-        4096,
-        "9f2c8ab34e5d",
-        16384,
-        1,
+        linko::FileManifest{"report.pdf", 4096, "9f2c8ab34e5d", 16384, 1},
     }));
     EXPECT_TRUE(roundTrips(linko::FileAccept{"c7a2", "file-7"}));
     EXPECT_TRUE(
