@@ -93,10 +93,12 @@ auto withEnded(const CallState &state, EndReason reason) -> CallState {
     return next;
 }
 
-// `event` addresses the state's call (or carries no callId at all, in which
-// case it belongs to whatever call is current).
+// `event` addresses the state's call. An event with an EMPTY callId is
+// foreign to every call: the typed bodies already reject empty callIds, so
+// only a hand-built event can carry one — and a hostile one must not reach
+// the current call through this side door. Empty is ignored everywhere.
 auto addressesThisCall(const CallState &state, const CallEvent &event) -> bool {
-    return event.callId.empty() || event.callId == state.callId;
+    return !event.callId.empty() && event.callId == state.callId;
 }
 
 // --- glare resolution (design spec 4.2) ---
@@ -166,9 +168,10 @@ auto applyIdle(const CallState &state, const CallEvent &event) -> Transition {
 auto applyOutgoingRinging(const CallState &state, const CallEvent &event)
     -> Transition {
     if (!addressesThisCall(state, event)) {
-        // A concurrent invite for another call is glare; anything else for
-        // another call is not ours to touch.
-        if (event.kind == CallEvent::RemoteInvite) {
+        // A concurrent invite for ANOTHER call is glare (an invite with an
+        // empty callId is not an invite to resolve, just noise); anything
+        // else for another call is not ours to touch.
+        if (event.kind == CallEvent::RemoteInvite && !event.callId.empty()) {
             return applyGlare(state, event);
         }
         return ignored(state);
@@ -197,8 +200,11 @@ auto applyOutgoingRinging(const CallState &state, const CallEvent &event)
             {cancelTimer(kRingTimeoutMs), reportEnded(EndReason::Busy)});
     }
     case CallEvent::LocalCancel: {
-        return transition(withEnded(state, EndReason::Cancelled),
-                          {sendMessage(kTypeCallCancel)});
+        // The ring timer dies with the call (plan deviation, recorded in the
+        // ledger: the plan's pinned effect list omitted this CancelTimer).
+        return transition(
+            withEnded(state, EndReason::Cancelled),
+            {cancelTimer(kRingTimeoutMs), sendMessage(kTypeCallCancel)});
     }
     case CallEvent::TimerRingExpired: {
         // The peer never picked up.

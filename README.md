@@ -2,7 +2,7 @@
 
 Cross-platform C++17 core of **Linko**, a private 1:1 messenger with audio/video calls and file transfer: the signaling and chat protocol, the call state machine, file chunking and message-sync rules, shared by the server and the iOS/macOS apps. Also hosts the design tokens and the shared repository tooling (`tooling/`).
 
-Everything here is pure value types and pure functions — no I/O, no clocks, no sockets, no exceptions across the API. The hosts (apps and server) move bytes and feed events back in.
+Everything here is pure value types and pure functions — no I/O, no clocks, no sockets. Parsing and validation never throw; the one exception source is `serialize`, which throws only on a hand-built envelope with invalid UTF-8 (see `include/linko/envelope.hpp`). The hosts (apps and server) move bytes and feed events back in.
 
 - Design spec: [linko-apple `docs/superpowers/specs/2026-10-25-linko-design.md`](https://github.com/EugeneHil/linko-apple/blob/develop/docs/superpowers/specs/2026-10-25-linko-design.md) (§4.2 LinkoCore, §4.8 design system, §7 quality gates)
 - Architecture decisions: [linko-apple `docs/adr/`](https://github.com/EugeneHil/linko-apple/tree/develop/docs/adr) — [ADR-0002](https://github.com/EugeneHil/linko-apple/blob/develop/docs/adr/0002-core-dependencies.md) records the dependency set: GoogleTest `v1.18.0` and nlohmann/json `v3.12.0`, pinned as release tarballs with SHA-256 in `cmake/Dependencies.cmake`.
