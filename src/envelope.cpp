@@ -1,5 +1,7 @@
 #include "linko/envelope.hpp"
 
+#include "linko/messages.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
