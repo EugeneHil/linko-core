@@ -29,7 +29,7 @@ CMake ≥ 3.28 with presets (`macos`, `windows`, `linux` — dev only, `coverage
 
 ```sh
 cmake --preset macos && cmake --build --preset macos && ctest --preset macos   # macOS
-cmake --preset windows && cmake --build --preset windows && ctest --preset windows  # Windows (VS 2022)
+cmake --preset windows && cmake --build --preset windows && ctest --preset windows  # Windows (auto-detected VS)
 ```
 
 One command for everything the CI checks:

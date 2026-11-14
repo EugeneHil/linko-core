@@ -19,9 +19,8 @@
     },
     {
       "name": "windows",
-      "displayName": "linko-core Windows (Visual Studio 2022, x64)",
-      "description": "Preset for Windows builds; exercised by CI.",
-      "generator": "Visual Studio 17 2022",
+      "displayName": "linko-core Windows (auto-detected Visual Studio, x64)",
+      "description": "Preset for Windows builds; exercised by CI. No generator is pinned: CMake uses the most recent Visual Studio installed on the host (VS 2026 on current GitHub runners).",
       "architecture": {
         "value": "x64",
         "strategy": "set"
