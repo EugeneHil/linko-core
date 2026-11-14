@@ -469,3 +469,134 @@ TEST(call_state, test_local_reject_incoming_ends) {
                                   reportEnded(EndReason::Rejected),
                               });
 }
+
+// Late signaling: the peer withdraws or hangs up while ICE is still
+// connecting. The connect timer is cancelled in every variant and the call
+// ends; a local cancel additionally sends call.cancel so the peer learns.
+TEST(call_state, test_connecting_remote_hangup_ends) {
+    const Transition transition = linko::applyEvent(
+        at(CallStateKind::Connecting, "c1"), on(CallEvent::RemoteHangup, "c1"));
+    expectState(transition, endedState("c1", EndReason::Normal));
+    expectEffects(transition, {
+                                  cancelTimer(linko::kConnectTimeoutMs),
+                                  reportEnded(EndReason::Normal),
+                              });
+}
+
+TEST(call_state, test_connecting_remote_cancel_ends) {
+    const Transition transition = linko::applyEvent(
+        at(CallStateKind::Connecting, "c1"), on(CallEvent::RemoteCancel, "c1"));
+    expectState(transition, endedState("c1", EndReason::Cancelled));
+    expectEffects(transition, {
+                                  cancelTimer(linko::kConnectTimeoutMs),
+                                  reportEnded(EndReason::Cancelled),
+                              });
+}
+
+TEST(call_state, test_connecting_local_cancel_ends) {
+    const Transition transition = linko::applyEvent(
+        at(CallStateKind::Connecting, "c1"), on(CallEvent::LocalCancel, "c1"));
+    expectState(transition, endedState("c1", EndReason::Cancelled));
+    expectEffects(transition, {
+                                  send(linko::kTypeCallCancel),
+                                  cancelTimer(linko::kConnectTimeoutMs),
+                              });
+}
+
+// The caller withdrew the call while it was still ringing on our side: the
+// ringtone stops, the ring timer is cancelled and the call reports ended.
+TEST(call_state, test_incoming_remote_cancel_while_ringing) {
+    const Transition transition =
+        linko::applyEvent(at(CallStateKind::IncomingRinging, "c2"),
+                          on(CallEvent::RemoteCancel, "c2"));
+    expectState(transition, endedState("c2", EndReason::Cancelled));
+    expectEffects(transition, {
+                                  stopRinging(),
+                                  cancelTimer(linko::kRingTimeoutMs),
+                                  reportEnded(EndReason::Cancelled),
+                              });
+}
+
+// Reconnecting: ICE came back before the reconnect budget ran out, so the
+// call resumes exactly where it was with only the timer cancelled.
+TEST(call_state, test_reconnecting_ice_connected_resumes) {
+    const Transition transition =
+        linko::applyEvent(at(CallStateKind::Reconnecting, "c1"),
+                          on(CallEvent::IceConnected, "c1"));
+    expectState(transition, at(CallStateKind::Active, "c1"));
+    expectEffects(transition, {cancelTimer(linko::kReconnectTimeoutMs)});
+}
+
+// The user gives up while reconnecting: call.hangup goes out (the peer may
+// still be connected) and the reconnect timer is cancelled.
+TEST(call_state, test_reconnecting_local_hangup_ends) {
+    const Transition transition =
+        linko::applyEvent(at(CallStateKind::Reconnecting, "c1"),
+                          on(CallEvent::LocalHangup, "c1"));
+    expectState(transition, endedState("c1", EndReason::Normal));
+    expectEffects(transition, {
+                                  send(linko::kTypeCallHangup),
+                                  cancelTimer(linko::kReconnectTimeoutMs),
+                              });
+}
+
+TEST(call_state, test_reconnecting_remote_hangup_ends) {
+    const Transition transition =
+        linko::applyEvent(at(CallStateKind::Reconnecting, "c1"),
+                          on(CallEvent::RemoteHangup, "c1"));
+    expectState(transition, endedState("c1", EndReason::Normal));
+    expectEffects(transition, {
+                                  cancelTimer(linko::kReconnectTimeoutMs),
+                                  reportEnded(EndReason::Normal),
+                              });
+}
+
+// A remote ICE restart arriving while we are already reconnecting is adopted
+// with one restart of our own; the reconnect timer keeps running.
+TEST(call_state, test_reconnecting_adopts_remote_ice_restart) {
+    const Transition transition =
+        linko::applyEvent(at(CallStateKind::Reconnecting, "c1"),
+                          on(CallEvent::RemoteIceRestart, "c1"));
+    expectState(transition, at(CallStateKind::Reconnecting, "c1"));
+    expectEffects(transition, {startIceRestart()});
+}
+
+// Conservative-ignore semantics: events a live state does not list are
+// dropped without effects, in every live state (not just Idle/Connecting).
+TEST(call_state, test_ignores_stray_events_in_live_states) {
+    Transition transition =
+        linko::applyEvent(at(CallStateKind::OutgoingRinging, "c1"),
+                          on(CallEvent::RemoteHangup, "c1"));
+    expectState(transition, at(CallStateKind::OutgoingRinging, "c1"));
+    expectEffects(transition, {});
+
+    transition = linko::applyEvent(at(CallStateKind::IncomingRinging, "c2"),
+                                   on(CallEvent::RemoteHangup, "c2"));
+    expectState(transition, at(CallStateKind::IncomingRinging, "c2"));
+    expectEffects(transition, {});
+
+    transition = linko::applyEvent(at(CallStateKind::Reconnecting, "c1"),
+                                   on(CallEvent::RemoteOffer, "c1"));
+    expectState(transition, at(CallStateKind::Reconnecting, "c1"));
+    expectEffects(transition, {});
+}
+
+// Events naming another call are ignored in the remaining live states too
+// (OutgoingRinging's glare handling is the one exception, pinned above).
+TEST(call_state, test_ignores_other_call_events_in_live_states) {
+    Transition transition =
+        linko::applyEvent(at(CallStateKind::IncomingRinging, "c2"),
+                          on(CallEvent::RemoteReject, "c9"));
+    expectState(transition, at(CallStateKind::IncomingRinging, "c2"));
+    expectEffects(transition, {});
+
+    transition = linko::applyEvent(at(CallStateKind::Connecting, "c1"),
+                                   on(CallEvent::IceConnected, "c9"));
+    expectState(transition, at(CallStateKind::Connecting, "c1"));
+    expectEffects(transition, {});
+
+    transition = linko::applyEvent(at(CallStateKind::Reconnecting, "c1"),
+                                   on(CallEvent::IceConnected, "c9"));
+    expectState(transition, at(CallStateKind::Reconnecting, "c1"));
+    expectEffects(transition, {});
+}

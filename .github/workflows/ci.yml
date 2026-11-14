@@ -1,0 +1,223 @@
+name: ci
+
+# Spec sections 5 and 8 (linko-apple/docs/superpowers/specs/2026-10-25-linko-design.md):
+# macOS and Windows runners are budgeted, so the whole workflow runs only on
+# pull requests targeting develop/main, never on every push; pushes to develop
+# only happen through green PRs, so a post-merge rerun would double the bill.
+# Linux-able checks (lint, tokens, path filtering) run on ubuntu-latest, the
+# cheapest runners. Secret scanning stays in its own workflow: gitleaks.yml.
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-pr-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Path filter (spec section 8): the build jobs skip entirely when a PR
+  # touches neither C++/CMake (core) nor the design tokens. Job-level skips
+  # (instead of workflow-level `paths:`) keep the check runs visible as
+  # "skipped", so required-check rules cannot hang on filtered PRs.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      core: ${{ steps.filter.outputs.core }}
+      tokens: ${{ steps.filter.outputs.tokens }}
+      cpp: ${{ steps.filter.outputs.cpp }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect changed areas
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin "$BASE_SHA" "$HEAD_SHA"
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          core=false
+          tokens=false
+          cpp_files=''
+          while IFS= read -r file; do
+            case "$file" in
+              src/*|include/*|tests/*|cmake/*|CMakeLists.txt|CMakePresets.json|.clang-format|.clang-tidy)
+                core=true
+                ;;
+              design-tokens/*)
+                tokens=true
+                ;;
+              .github/workflows/ci.yml)
+                core=true
+                tokens=true
+                ;;
+            esac
+            case "$file" in
+              src/*.cpp|tests/*.cpp)
+                if [ -f "$file" ]; then
+                  cpp_files="$cpp_files $file"
+                fi
+                ;;
+            esac
+          done < <(git diff --name-only "$merge_base" "$HEAD_SHA")
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+          echo "tokens=$tokens" >> "$GITHUB_OUTPUT"
+          echo "cpp=${cpp_files# }" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Ensure ccache
+        run: command -v ccache >/dev/null 2>&1 || brew install ccache
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: macos-ccache-v1-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt', 'cmake/Dependencies.cmake', 'CMakePresets.json') }}
+          restore-keys: |
+            macos-ccache-v1-
+      - name: Configure
+        run: cmake --preset macos -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build --preset macos
+      - name: Test
+        run: ctest --preset macos
+
+  windows:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore build tree
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/windows
+          key: windows-build-v1-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt', 'cmake/Dependencies.cmake', 'CMakePresets.json') }}
+          restore-keys: |
+            windows-build-v1-
+      - name: Configure
+        run: cmake --preset windows
+      - name: Build
+        run: cmake --build --preset windows
+      - name: Test
+        run: ctest --preset windows
+
+  coverage:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Ensure ccache
+        run: command -v ccache >/dev/null 2>&1 || brew install ccache
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: coverage-ccache-v1-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt', 'cmake/Dependencies.cmake', 'CMakePresets.json') }}
+          restore-keys: |
+            coverage-ccache-v1-
+      - name: Configure, build, test (coverage preset)
+        run: |
+          cmake --preset coverage -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build --preset coverage
+          ctest --preset coverage
+      - name: Coverage report and gate
+        run: |
+          set -euo pipefail
+          # The profiling runtime and the llvm-cov tools must come from the
+          # same LLVM installation: on the runner both are Xcode's.
+          profdata_bin="$(xcrun --find llvm-profdata 2>/dev/null || true)"
+          if [ -z "$profdata_bin" ]; then
+            profdata_bin="$(command -v llvm-profdata || true)"
+          fi
+          if [ -z "$profdata_bin" ]; then
+            echo "ci: llvm-profdata not found" >&2
+            exit 1
+          fi
+          llvmbin="$(dirname "$profdata_bin")"
+          "$profdata_bin" merge -sparse build/coverage/*.profraw -o build/coverage/coverage.profdata
+          cov_args=()
+          while IFS= read -r exe; do
+            if [ ${#cov_args[@]} -eq 0 ]; then
+              cov_args+=("$exe")
+            else
+              cov_args+=(-object "$exe")
+            fi
+          done < <(find build/coverage/tests -type f -perm -111 ! -name '*.*' | sort)
+          "$llvmbin/llvm-cov" report "${cov_args[@]}" \
+            -instr-profile=build/coverage/coverage.profdata "$PWD/src" 2>/dev/null
+          # Spec section 7: linko_core line coverage gate at 90 percent.
+          percent="$("$llvmbin/llvm-cov" export -summary-only "${cov_args[@]}" \
+            -instr-profile=build/coverage/coverage.profdata "$PWD/src" 2>/dev/null |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["totals"]["lines"]["percent"])')"
+          echo "linko_core line coverage: ${percent}% (gate: 90%)"
+          awk -v p="$percent" 'BEGIN {
+            if (p + 0 < 90) {
+              printf "line coverage %.2f%% is below the 90%% gate (spec section 7)\n", p > "/dev/stderr"
+              exit 1
+            }
+          }'
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Ensure clang tools
+        run: |
+          if ! command -v clang-format >/dev/null 2>&1 || ! command -v clang-tidy >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends clang-format clang-tidy
+          fi
+      - name: clang-format check
+        run: |
+          set -euo pipefail
+          mapfile -t sources < <(find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) | sort)
+          clang-format --dry-run --Werror "${sources[@]}"
+      - name: clang-tidy check
+        env:
+          CPP_FILES: ${{ needs.changes.outputs.cpp }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CPP_FILES" ]; then
+            echo "clang-tidy: no changed .cpp files; headers are checked via their including TU"
+            exit 0
+          fi
+          # Configure only: clang-tidy needs compile_commands.json from the
+          # linux preset; no build necessary.
+          cmake --preset linux
+          read -ra files <<< "$CPP_FILES"
+          clang-tidy -p build/linux "${files[@]}"
+
+  tokens:
+    needs: changes
+    if: needs.changes.outputs.tokens == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Design token freshness and tests
+        run: |
+          python3 design-tokens/generate.py --check
+          python3 -I -B -m unittest discover -s design-tokens -v

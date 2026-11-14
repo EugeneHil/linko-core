@@ -185,3 +185,74 @@ TEST(Envelope, test_serialize_roundtrip) {
     EXPECT_EQ(envelope.ts, original.ts);
     EXPECT_EQ(envelope.body, original.body);
 }
+
+// --- byte-level and field-level error branches ---
+
+// An envelope whose id embeds `idBytes` must be rejected as invalid UTF-8.
+auto rejectsIdBytes(const std::string &idBytes) -> void {
+    const std::string json = R"({"v":1,"type":"session.ping","id":"6)" +
+                             idBytes + R"(","ts":1,"body":{}})";
+    const auto result = linko::parseEnvelope(json);
+    EXPECT_FALSE(result.envelope.has_value());
+    ASSERT_EQ(result.errors.size(), 1U);
+    EXPECT_EQ(result.errors[0].path, "");
+    EXPECT_EQ(result.errors[0].message, "invalid UTF-8");
+}
+
+TEST(Envelope, test_accepts_multibyte_utf8) {
+    // A 3-byte (Euro sign) and a 4-byte (emoji) sequence are valid UTF-8 and
+    // must pass the byte-level gate before JSON parsing.
+    const std::string multibyteId = "6\xE2\x82\xAC\xF0\x9F\x98\x80";
+    const std::string json = R"({"v":1,"type":"session.ping","id":")" +
+                             multibyteId + R"(","ts":1,"body":{}})";
+    const auto result = linko::parseEnvelope(json);
+    ASSERT_TRUE(result.errors.empty());
+    ASSERT_TRUE(result.envelope.has_value());
+    const linko::Envelope &envelope =
+        result.envelope.value(); // NOLINT(bugprone-unchecked-optional-access)
+    EXPECT_EQ(envelope.id, multibyteId);
+}
+
+TEST(Envelope, test_rejects_malformed_utf8_sequences) {
+    rejectsIdBytes(std::string("\xFF"));         // never a lead byte
+    rejectsIdBytes(std::string("\xE2\x82"));     // truncated inside the input
+    rejectsIdBytes(std::string("\xC0\x80"));     // overlong encoding of U+0000
+    rejectsIdBytes(std::string("\xED\xA0\x80")); // surrogate U+D800
+    rejectsIdBytes("\xF4\x90\x80\x80");          // above U+10FFFF
+
+    // A sequence that would run past the very end of the input.
+    const auto truncated = linko::parseEnvelope(
+        std::string(
+            R"({"v":1,"type":"session.ping","id":"6f1c","ts":1,"body":{}})") +
+        "\xE2\x82");
+    EXPECT_FALSE(truncated.envelope.has_value());
+    ASSERT_EQ(truncated.errors.size(), 1U);
+    EXPECT_EQ(truncated.errors[0].message, "invalid UTF-8");
+}
+
+TEST(Envelope, test_rejects_invalid_json) {
+    // Well-formed UTF-8 and nesting, but not parseable JSON.
+    const auto result = linko::parseEnvelope(R"({"v":1,"type":)");
+    EXPECT_FALSE(result.envelope.has_value());
+    ASSERT_EQ(result.errors.size(), 1U);
+    EXPECT_EQ(result.errors[0].path, "");
+    EXPECT_NE(result.errors[0].message.find("invalid JSON"), std::string::npos);
+}
+
+TEST(Envelope, test_wrong_field_types_carry_paths) {
+    const auto result =
+        linko::parseEnvelope(R"({"v":"1","type":5,"id":7,"ts":"x","body":{}})");
+    EXPECT_FALSE(result.envelope.has_value());
+    ASSERT_EQ(result.errors.size(), 4U);
+    EXPECT_TRUE(hasError(result, "v: must be an integer"));
+    EXPECT_TRUE(hasError(result, "type: must be a string"));
+    EXPECT_TRUE(hasError(result, "id: must be a string"));
+    EXPECT_TRUE(hasError(result, "ts: must be an integer"));
+}
+
+TEST(Envelope, test_missing_body_rejected) {
+    const auto result = linko::parseEnvelope(
+        R"({"v":1,"type":"session.ping","id":"6f1c","ts":1})");
+    EXPECT_FALSE(result.envelope.has_value());
+    EXPECT_TRUE(hasError(result, "body: missing"));
+}

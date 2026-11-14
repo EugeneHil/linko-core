@@ -16,6 +16,9 @@
 namespace {
 
 constexpr std::int64_t kSampleTs = 1792877416123;
+constexpr std::int64_t kSampleSeq = 7;
+constexpr std::uint64_t kSampleFileSize = 4096;
+constexpr std::uint32_t kSampleChunkSize = 16384;
 
 // All errors of a parse formatted as "path: message" for failure messages.
 auto joinedErrors(const std::vector<linko::ValidationError> &errors)
@@ -291,4 +294,187 @@ TEST(Messages, test_all_bodies_roundtrip) {
     EXPECT_TRUE(roundTrips(linko::FileAccept{"c7a2", "file-7"}));
     EXPECT_TRUE(
         roundTrips(linko::FileCancel{"c7a2", "file-7", "user cancelled"}));
+}
+
+// --- error branches of the fromBody validators ---
+
+// fromBody of a non-object is rejected with exactly one "body: must be an
+// object" error, for every family and the nested FileMeta/MessageRecord.
+template <typename T> auto rejectsNonObjectBody() -> void {
+    std::vector<linko::ValidationError> errors;
+    const auto parsed = T::fromBody(nlohmann::json::array(), errors);
+    EXPECT_FALSE(parsed.has_value());
+    ASSERT_EQ(errors.size(), 1U);
+    EXPECT_EQ(errors[0].path, "body");
+    EXPECT_EQ(errors[0].message, "must be an object");
+}
+
+// fromBody of `body` fails with exactly one `path: message` error.
+template <typename T>
+auto expectSingleError(const nlohmann::json &body, const std::string &path,
+                       const std::string &message) -> void {
+    std::vector<linko::ValidationError> errors;
+    const auto parsed = T::fromBody(body, errors);
+    EXPECT_FALSE(parsed.has_value());
+    ASSERT_EQ(errors.size(), 1U);
+    EXPECT_EQ(errors[0].path, path);
+    EXPECT_EQ(errors[0].message, message);
+}
+
+// `body` with `key` set to `value` (wrong type on purpose).
+auto withField(nlohmann::json body, const char *key, nlohmann::json value)
+    -> nlohmann::json {
+    body[key] = std::move(value);
+    return body;
+}
+
+TEST(Messages, test_rejects_non_object_body) {
+    rejectsNonObjectBody<linko::SessionHello>();
+    rejectsNonObjectBody<linko::SessionError>();
+    rejectsNonObjectBody<linko::PresenceChanged>();
+    rejectsNonObjectBody<linko::CallInvite>();
+    rejectsNonObjectBody<linko::CallRef>();
+    rejectsNonObjectBody<linko::CallSdp>();
+    rejectsNonObjectBody<linko::CallIce>();
+    rejectsNonObjectBody<linko::CallEnd>();
+    rejectsNonObjectBody<linko::FileMeta>();
+    rejectsNonObjectBody<linko::MessageRecord>();
+    rejectsNonObjectBody<linko::MsgSend>();
+    rejectsNonObjectBody<linko::MsgStored>();
+    rejectsNonObjectBody<linko::MsgDeliver>();
+    rejectsNonObjectBody<linko::MsgAck>();
+    rejectsNonObjectBody<linko::MsgSync>();
+    rejectsNonObjectBody<linko::FileOffer>();
+    rejectsNonObjectBody<linko::FileAccept>();
+    rejectsNonObjectBody<linko::FileCancel>();
+}
+
+TEST(Messages, test_wrong_field_types_rejected) {
+    // A string field holding a boolean.
+    expectSingleError<linko::SessionHello>(
+        withField(linko::SessionHello{"anna", "iphone-15"}.toBody(), "user",
+                  false),
+        "body.user", "must be a string");
+
+    // The enum-like string field takes the same path through requireString.
+    expectSingleError<linko::CallInvite>(
+        withField(linko::CallInvite{"c7a2", "anna", "audio"}.toBody(), "media",
+                  false),
+        "body.media", "must be a string");
+
+    // A boolean field holding a string.
+    expectSingleError<linko::PresenceChanged>(
+        withField(linko::PresenceChanged{"anna", true}.toBody(), "online",
+                  "yes"),
+        "body.online", "must be a boolean");
+
+    // An integer field holding a string.
+    expectSingleError<linko::MsgStored>(
+        withField(linko::MsgStored{"m-1", kSampleSeq, kSampleTs}.toBody(),
+                  "seq", "seven"),
+        "body.seq", "must be an integer");
+
+    // The optional reason must still be a string when present.
+    expectSingleError<linko::CallEnd>(
+        withField(
+            linko::CallEnd{"c7a2", std::optional<std::string>{"busy"}}.toBody(),
+            "reason", false),
+        "body.reason", "must be a string");
+}
+
+TEST(Messages, test_missing_required_fields_rejected) {
+    expectSingleError<linko::SessionHello>(
+        nlohmann::json{{"device", "iphone-15"}}, "body.user", "missing");
+    expectSingleError<linko::SessionError>(
+        nlohmann::json{{"detail", "v must be 1"}}, "body.code", "missing");
+    expectSingleError<linko::PresenceChanged>(nlohmann::json{{"user", "anna"}},
+                                              "body.online", "missing");
+    expectSingleError<linko::CallInvite>(
+        nlohmann::json{{"to", "anna"}, {"media", "video"}}, "body.callId",
+        "missing");
+    expectSingleError<linko::CallRef>(nlohmann::json::object(), "body.callId",
+                                      "missing");
+    expectSingleError<linko::CallIce>(
+        nlohmann::json{
+            {"callId", "c7a2"},
+            {"candidate", "candidate:1 1 UDP 2130706431 192.168.1.4 61665"},
+            {"sdpMid", "0"},
+        },
+        "body.sdpMLineIndex", "missing");
+    expectSingleError<linko::CallEnd>(nlohmann::json::object(), "body.callId",
+                                      "missing");
+    expectSingleError<linko::MsgSend>(
+        nlohmann::json{{"id", "m-1"}, {"to", "anna"}}, "body.text", "missing");
+    expectSingleError<linko::MsgStored>(
+        nlohmann::json{{"id", "m-1"}, {"ts", kSampleTs}}, "body.seq",
+        "missing");
+    expectSingleError<linko::MsgAck>(nlohmann::json{{"conversation", "conv-1"}},
+                                     "body.uptoSeq", "missing");
+    expectSingleError<linko::MsgSync>(
+        nlohmann::json{{"conversation", "conv-1"}}, "body.afterSeq", "missing");
+
+    auto offer =
+        linko::FileOffer{
+            "c7a2",
+            "file-7",
+            linko::FileManifest{
+                "report.pdf",
+                kSampleFileSize,
+                "9f2c8ab34e5d",
+                kSampleChunkSize,
+                1,
+            },
+        }
+            .toBody();
+    offer.erase("chunkSize");
+    expectSingleError<linko::FileOffer>(offer, "body.chunkSize", "missing");
+
+    expectSingleError<linko::FileAccept>(nlohmann::json{{"callId", "c7a2"}},
+                                         "body.fileId", "missing");
+    expectSingleError<linko::FileCancel>(
+        nlohmann::json{{"callId", "c7a2"}, {"fileId", "file-7"}}, "body.reason",
+        "missing");
+}
+
+TEST(Messages, test_nested_file_and_message_errors) {
+    // A file field that is present but not an object.
+    expectSingleError<linko::MsgSend>(
+        nlohmann::json{
+            {"id", "m-1"},
+            {"to", "anna"},
+            {"text", "hi"},
+            {"file", nlohmann::json::array()},
+        },
+        "body.file", "must be an object");
+
+    // A file meta object missing one of its required fields.
+    auto meta =
+        linko::FileMeta{
+            "report.pdf", kSampleFileSize, "9f2c8ab34e5d", "p2p", "file-7",
+        }
+            .toBody();
+    meta.erase("transport");
+    expectSingleError<linko::MsgSend>(
+        nlohmann::json{
+            {"id", "m-1"},
+            {"to", "anna"},
+            {"text", "hi"},
+            {"file", meta},
+        },
+        "body.file.transport", "missing");
+
+    // msg.deliver without, or with a malformed, nested message record.
+    expectSingleError<linko::MsgDeliver>(nlohmann::json::object(),
+                                         "body.message", "missing");
+    expectSingleError<linko::MsgDeliver>(nlohmann::json{{"message", "x"}},
+                                         "body.message", "must be an object");
+
+    auto record =
+        linko::MessageRecord{
+            "m-1", "anna", "bob", "hello", std::nullopt, kSampleSeq, kSampleTs,
+        }
+            .toBody();
+    record.erase("seq");
+    expectSingleError<linko::MsgDeliver>(nlohmann::json{{"message", record}},
+                                         "body.message.seq", "missing");
 }
