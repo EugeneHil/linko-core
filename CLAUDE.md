@@ -21,7 +21,7 @@ Linko: a private 1:1 messenger for iPhone and Mac with audio/video calls and fil
 ## linko-core stack
 
 - Pure C++17 (no platform code), CMake ≥ 3.28 with presets. Warnings are errors: GCC/Clang `-Wall -Wextra -Wpedantic -Werror`, MSVC `/W4 /WX`.
-- Dependencies come via CMake `FetchContent` pinned to exact tags in `cmake/Dependencies.cmake`: GoogleTest `v1.18.0`, nlohmann/json `v3.12.0`. Decision and pins: ADR-0002 (`linko-apple/docs/adr/0002-core-dependencies.md`); upgrades go through a PR + ADR note.
+- Dependencies come via CMake `FetchContent` pinned to release tarballs (`URL` + `URL_HASH SHA256=...`) in `cmake/Dependencies.cmake`: GoogleTest `v1.18.0`, nlohmann/json `v3.12.0`. Decision, tags and hashes: ADR-0002 (`linko-apple/docs/adr/0002-core-dependencies.md`); upgrades go through a PR + ADR note.
 - Build and test (presets: `macos`, `windows`, `linux` dev-only, `coverage` macOS + llvm-cov):
   `cmake --preset macos && cmake --build --preset macos && ctest --preset macos`
 - Coverage (macOS): `scripts/ci-local.sh` builds the `coverage` preset with the Clang from the same LLVM as `llvm-profdata`/`llvm-cov` (Homebrew LLVM), runs the tests under `LLVM_PROFILE_FILE`, merges with `llvm-profdata merge -sparse` and reports with `llvm-cov report`. When running the steps by hand, keep the compiler and the llvm-cov tools from the same LLVM installation, or the profile merge fails.
