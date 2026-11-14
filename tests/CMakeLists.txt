@@ -13,3 +13,4 @@ endfunction()
 
 linko_add_test(smoke test_smoke.cpp)
 linko_add_test(envelope test_envelope.cpp)
+linko_add_test(messages test_messages.cpp)

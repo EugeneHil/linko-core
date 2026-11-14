@@ -7,7 +7,6 @@
 // path; serialize turns an Envelope back into wire format.
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -24,14 +23,8 @@ inline constexpr std::size_t kMaxEnvelopeBytes = 65536; // 64 KiB
 inline constexpr std::size_t kMaxSdpBytes = 32768;      // 32 KiB
 inline constexpr int kMaxNestingDepth = 16;
 
-// Message types the parser accepts. Currently the session family only; later
-// tasks extend this set to all message families.
-inline constexpr std::array<std::string_view, 4> kKnownTypes{
-    "session.hello",
-    "session.ping",
-    "session.pong",
-    "session.error",
-};
+// Accepted message types live in messages.hpp: the kType* name constants
+// there are the single source of truth and build kKnownTypes.
 
 // A decoded envelope. body stays raw JSON; typed structs per message family
 // are layered on top in later tasks.
@@ -62,7 +55,12 @@ struct ParseResult {
 // no exceptions escape (a parse failure becomes an error entry).
 auto parseEnvelope(std::string_view json) -> ParseResult;
 
-// Serializes an envelope to wire format.
+// Serializes an envelope to wire format. Throws nlohmann::json::type_error
+// 316 (invalid UTF-8) only when a hand-built Envelope puts invalid UTF-8
+// into a string: dump() is strict. Envelopes that came out of parseEnvelope
+// (which gates UTF-8 before parsing) and bodies built by the typed toBody()
+// functions in messages.hpp are valid UTF-8 by construction, so serialize
+// never throws for them.
 auto serialize(const Envelope &envelope) -> std::string;
 
 } // namespace linko
