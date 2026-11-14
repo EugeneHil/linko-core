@@ -9,7 +9,7 @@ Everything here is pure value types and pure functions — no I/O, no clocks, no
 
 ## Module map
 
-Public headers in `include/linko/`, implementations in `src/`, GoogleTest suites in `tests/` (6 suites, 64 tests, registered with `linko_add_test`).
+Public headers in `include/linko/`, implementations in `src/`, GoogleTest suites in `tests/` (registered with `linko_add_test`; run `ctest --preset macos` for the current count).
 
 | Module | Files | Provides |
 |---|---|---|
