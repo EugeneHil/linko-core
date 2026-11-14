@@ -12,3 +12,4 @@ function(linko_add_test name)
 endfunction()
 
 linko_add_test(smoke test_smoke.cpp)
+linko_add_test(envelope test_envelope.cpp)
