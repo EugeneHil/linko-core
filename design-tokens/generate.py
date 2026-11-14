@@ -239,13 +239,19 @@ def check(tokens_path: Path, swift_out: Path) -> int:
     try:
         actual = swift_out.read_text(encoding="utf-8")
     except FileNotFoundError:
-        print(f"error: {swift_out} does not exist — it is stale")
-        print(f"regenerate with: python3 {tokens_path.parent.name}/generate.py")
+        print(f"error: {swift_out} does not exist — it is stale", file=sys.stderr)
+        print(
+            f"regenerate with: python3 {tokens_path.parent.name}/generate.py",
+            file=sys.stderr,
+        )
         return 1
     if actual == expected:
         print(f"{swift_out} is up to date")
         return 0
-    print(f"error: {swift_out} is stale — regenerate it, do not edit by hand")
+    # Error lines go to stderr like every other failure; the diff itself is
+    # the actionable output and stays on stdout.
+    print(f"error: {swift_out} is stale — regenerate it, do not edit by hand",
+          file=sys.stderr)
     diff = difflib.unified_diff(
         actual.splitlines(keepends=True),
         expected.splitlines(keepends=True),

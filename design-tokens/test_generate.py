@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -112,8 +113,30 @@ class GenerateTest(unittest.TestCase):
             stale.write_text("// stale output\n", encoding="utf-8")
             result = run_generate("--check", "--swift-out", str(stale))
             self.assertEqual(result.returncode, 1)
-            self.assertIn("stale", result.stdout)
+            # Error lines on stderr; the actionable diff stays on stdout.
+            self.assertIn("error:", result.stderr)
+            self.assertIn("stale", result.stderr)
             self.assertIn("-// stale output", result.stdout)
+
+    def test_invalid_tokens_exit_2_with_stderr(self) -> None:
+        # A broken tokens.json must fail loudly at the CLI: exit code 2 with
+        # the error on stderr, never a stack trace or a partial write.
+        with tempfile.TemporaryDirectory() as tmp:
+            copied = Path(tmp) / "design-tokens"
+            shutil.copytree(HERE, copied, ignore=shutil.ignore_patterns("__pycache__"))
+            (copied / "tokens.json").write_text(
+                '{"colors": {}, "typography": {}, "spacing": {},'
+                ' "radii": {}, "controlSizes": {}}',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", str(copied / "generate.py")],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("error:", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_check_passes_on_fresh_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
