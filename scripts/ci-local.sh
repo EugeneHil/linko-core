@@ -28,6 +28,9 @@ cmake --preset "$preset"
 cmake --build --preset "$preset"
 ctest --preset "$preset"
 
+echo "== design tokens check"
+python3 design-tokens/generate.py --check
+
 # Every C++ file we track must live in include/, src/ or tests/.
 sources=()
 while IFS= read -r f; do
