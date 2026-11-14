@@ -1,3 +1,7 @@
 # linko-core clang-tidy checks; findings are errors in scripts/ci-local.sh.
+# clang-tidy runs on .cpp translation units only; the public headers are
+# checked through their including TU via the header filter below, which also
+# keeps system and dependency headers out of the diagnostics.
 Checks: 'bugprone-*,modernize-*,readability-*,performance-*'
 WarningsAsErrors: '*'
+HeaderFilterRegex: 'include/linko/.*'

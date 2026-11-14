@@ -9,10 +9,16 @@ repo=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd -P)
 cd "$repo"
 
 # clang-format, clang-tidy and the llvm-cov tools come from Homebrew LLVM
-# when they are not already on PATH.
-if ! command -v clang-format >/dev/null 2>&1 && [ -d /opt/homebrew/opt/llvm/bin ]; then
-  PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-  export PATH
+# when they are not already on PATH. Both Homebrew prefixes are probed:
+# /opt/homebrew (Apple Silicon) and /usr/local (Intel).
+if ! command -v clang-format >/dev/null 2>&1; then
+  for brew_llvm in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
+    if [ -x "$brew_llvm/clang-format" ]; then
+      PATH="$brew_llvm:$PATH"
+      export PATH
+      break
+    fi
+  done
 fi
 
 preset=${1:-}
@@ -31,6 +37,9 @@ ctest --preset "$preset"
 echo "== design tokens check"
 python3 design-tokens/generate.py --check
 
+echo "== design tokens tests"
+python3 -I -B -m unittest discover -s design-tokens
+
 # Every C++ file we track must live in include/, src/ or tests/.
 sources=()
 while IFS= read -r f; do
@@ -43,8 +52,19 @@ if [ "${#sources[@]}" -gt 0 ]; then
 fi
 
 echo "== clang-tidy check"
-if [ "${#sources[@]}" -gt 0 ]; then
-  clang-tidy -p "build/$preset" "${sources[@]}"
+# tidy runs on .cpp translation units only: every header in include/ and
+# tests/ is pulled in by some TU, and .clang-tidy's HeaderFilterRegex makes
+# findings inside include/linko/.* surface through the including TU. Parsing
+# headers standalone would both duplicate work and drown the output in
+# suppressed warnings from non-user code.
+tidy_sources=()
+for f in "${sources[@]}"; do
+  case "$f" in
+    *.cpp) tidy_sources+=("$f") ;;
+  esac
+done
+if [ "${#tidy_sources[@]}" -gt 0 ]; then
+  clang-tidy -p "build/$preset" "${tidy_sources[@]}"
 fi
 
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -54,8 +74,13 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # installation: build the coverage preset with the Clang that ships next to
   # llvm-profdata (Homebrew LLVM), not with whatever `c++` resolves to.
   profdata_bin=$(command -v llvm-profdata || true)
-  if [ -z "$profdata_bin" ] && [ -x /opt/homebrew/opt/llvm/bin/llvm-profdata ]; then
-    profdata_bin=/opt/homebrew/opt/llvm/bin/llvm-profdata
+  if [ -z "$profdata_bin" ]; then
+    for brew_llvm in /opt/homebrew/opt/llvm /usr/local/opt/llvm; do
+      if [ -x "$brew_llvm/bin/llvm-profdata" ]; then
+        profdata_bin=$brew_llvm/bin/llvm-profdata
+        break
+      fi
+    done
   fi
   if [ -z "$profdata_bin" ]; then
     echo "ci-local: llvm-profdata not found (install Homebrew LLVM)" >&2
